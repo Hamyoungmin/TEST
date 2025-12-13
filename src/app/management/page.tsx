@@ -158,7 +158,14 @@ export default function ManagementPage() {
                 {dbData.map((record) => (
                   <tr key={record.id}>
                     <td className={styles.idColumn}>{record.id}</td>
-                    <td className={styles.fileColumn}>{record.file_name}</td>
+                    <td className={styles.fileColumn}>
+                      <Link 
+                        href={`/management/${encodeURIComponent(record.file_name)}/edit`}
+                        className={styles.fileLink}
+                      >
+                        📄 {record.file_name}
+                      </Link>
+                    </td>
                     <td className={styles.dateColumn}>
                       {new Date(record.created_at).toLocaleString("ko-KR")}
                     </td>
