@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
@@ -23,30 +23,30 @@ const cleanHeaderName = (header: string): string => {
   return header.trim();
 };
 
-// 불필요한 컬럼인지 확인
-const isValidColumn = (header: string, records: DbRecord[]): boolean => {
-  const cleanName = cleanHeaderName(header);
-  
-  if (/^column\s*\d+$/i.test(cleanName)) {
-    return false;
-  }
-  
-  if (!cleanName || cleanName.trim() === "") {
-    return false;
-  }
-  
-  const hasData = records.some((record) => {
-    const value = record.row_data[header];
-    return value !== null && value !== undefined && String(value).trim() !== "";
-  });
-  
-  return hasData;
-};
-
 // 새 행을 위한 임시 ID 생성 (음수값 사용)
 let tempIdCounter = -1;
 const generateTempId = () => {
   return tempIdCounter--;
+};
+
+// 빈 행 여러 개 생성 함수
+const createEmptyRows = (headers: string[], fileName: string, count: number): DbRecord[] => {
+  const newRows: DbRecord[] = [];
+  for (let i = 0; i < count; i++) {
+    const emptyRowData: Record<string, string | number | boolean | null> = {};
+    headers.forEach((header) => {
+      emptyRowData[header] = "";
+    });
+
+    newRows.push({
+      id: generateTempId(),
+      created_at: new Date().toISOString(),
+      file_name: fileName,
+      row_data: emptyRowData,
+      isNew: true,
+    });
+  }
+  return newRows;
 };
 
 export default function EditPage() {
@@ -69,6 +69,10 @@ export default function EditPage() {
   const [newColumnName, setNewColumnName] = useState("");
   const [isAddingColumn, setIsAddingColumn] = useState(false);
   const columnInputRef = useRef<HTMLInputElement>(null);
+
+  // 무한 스크롤 관련
+  const gridWrapperRef = useRef<HTMLDivElement>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   // fileId에 해당하는 데이터 불러오기
   const fetchData = async () => {
@@ -96,8 +100,6 @@ export default function EditPage() {
           return acc;
         }, []);
 
-        setRecords(uniqueRecords);
-
         // 모든 레코드에서 헤더 수집
         const allHeadersSet = new Set<string>();
         uniqueRecords.forEach((record) => {
@@ -108,21 +110,18 @@ export default function EditPage() {
 
         const allHeaders = Array.from(allHeadersSet);
         
-        // 유효한 컬럼만 필터링 (데이터가 있고, Column X 패턴이 아닌 것)
+        // 유효한 컬럼만 필터링
         const validHeaders = allHeaders.filter((h) => {
           const cleanName = cleanHeaderName(h);
           
-          // Column X 패턴은 제외 (대소문자 무관)
           if (/^column\s*\d+$/i.test(cleanName)) {
             return false;
           }
           
-          // 빈 헤더명은 제외
           if (!cleanName || cleanName.trim() === "") {
             return false;
           }
           
-          // 해당 컬럼에 실제 데이터가 있는지 확인
           const hasData = uniqueRecords.some((record) => {
             const value = record.row_data[h];
             return value !== null && value !== undefined && String(value).trim() !== "";
@@ -133,7 +132,12 @@ export default function EditPage() {
         
         setHeaders(validHeaders);
         setDisplayHeaders(validHeaders.map(cleanHeaderName));
+        
+        // 페이지 로딩 시 빈 행 30개 자동 추가 (Excel처럼 스크롤 가능하도록)
+        const initialEmptyRows = createEmptyRows(validHeaders, decodedFileName, 30);
+        setRecords([...uniqueRecords, ...initialEmptyRows]);
       } else {
+        // 데이터가 없어도 헤더가 있으면 빈 행 추가
         setError("해당 파일의 데이터가 없습니다.");
       }
     } catch (err) {
@@ -163,25 +167,65 @@ export default function EditPage() {
     }
   }, [showAddColumnModal]);
 
-  // 새 행 추가
-  const handleAddRow = () => {
-    const emptyRowData: Record<string, string | number | boolean | null> = {};
-    headers.forEach((header) => {
-      emptyRowData[header] = "";
+  // 무한 스크롤: 스크롤 바닥 도달 시 빈 행 15개 자동 추가 (Excel처럼)
+  const loadMoreRows = useCallback(() => {
+    if (isLoadingMore || headers.length === 0) return;
+    
+    setIsLoadingMore(true);
+    
+    // 빈 행 15개 추가 (Excel처럼 여유있게)
+    const newRows = createEmptyRows(headers, fileName, 15);
+    setRecords((prev) => [...prev, ...newRows]);
+    
+    // 짧은 딜레이 후 로딩 상태 해제
+    requestAnimationFrame(() => {
+      setIsLoadingMore(false);
     });
+  }, [headers, fileName, isLoadingMore]);
 
-    const newRecord: DbRecord = {
-      id: generateTempId(),
-      created_at: new Date().toISOString(),
-      file_name: fileName,
-      row_data: emptyRowData,
-      isNew: true,
+  // 스크롤 이벤트로 테이블 바닥 감지 (무한 스크롤 - Excel 스타일)
+  useEffect(() => {
+    const gridWrapper = gridWrapperRef.current;
+    if (!gridWrapper || isLoading || headers.length === 0) return;
+
+    let ticking = false;
+
+    const handleScroll = () => {
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          const { scrollTop, scrollHeight, clientHeight } = gridWrapper;
+          
+          // 바닥에서 300px 이내에 도달하면 행 추가 (더 일찍 트리거)
+          const isNearBottom = scrollTop + clientHeight >= scrollHeight - 300;
+          
+          if (isNearBottom && !isLoadingMore) {
+            loadMoreRows();
+          }
+          ticking = false;
+        });
+        ticking = true;
+      }
     };
 
-    setRecords((prev) => [...prev, newRecord]);
-    setSuccessMessage("새 행이 추가되었습니다. 데이터를 입력하세요.");
-    setTimeout(() => setSuccessMessage(""), 2000);
-  };
+    gridWrapper.addEventListener("scroll", handleScroll, { passive: true });
+
+    // 초기 로드 시 스크롤 가능 여부 체크
+    const checkInitialScroll = () => {
+      const { scrollHeight, clientHeight } = gridWrapper;
+      // 컨텐츠가 화면보다 작으면 자동으로 행 추가
+      if (scrollHeight <= clientHeight && !isLoadingMore) {
+        loadMoreRows();
+      }
+    };
+    
+    // 약간의 딜레이 후 초기 체크
+    const timer = setTimeout(checkInitialScroll, 100);
+
+    return () => {
+      gridWrapper.removeEventListener("scroll", handleScroll);
+      clearTimeout(timer);
+    };
+  }, [loadMoreRows, isLoading, isLoadingMore, headers.length]);
 
   // 새 열 추가 모달 열기
   const handleOpenAddColumnModal = () => {
@@ -189,7 +233,7 @@ export default function EditPage() {
     setShowAddColumnModal(true);
   };
 
-  // 새 열 추가 실행
+  // 새 열 추가 실행 (JSONB 기반 UPDATE)
   const handleAddColumn = async () => {
     const trimmedName = newColumnName.trim();
     
@@ -274,7 +318,7 @@ export default function EditPage() {
     setEditValue(value !== null && value !== undefined ? String(value) : "");
   };
 
-  // 셀 수정 후 DB 업데이트
+  // 셀 수정 후 DB 업데이트 (새 행이면 Insert, 기존 행이면 Update)
   const handleCellUpdate = async () => {
     if (!editingCell) return;
 
@@ -297,6 +341,7 @@ export default function EditPage() {
     };
 
     try {
+      // 새 행이면 INSERT (무한 스크롤로 생성된 빈 행에 데이터 입력 시)
       if (record.isNew || record.id < 0) {
         const { data: insertedData, error: insertError } = await supabase
           .from("재고")
@@ -317,10 +362,11 @@ export default function EditPage() {
                 : r
             )
           );
-          setSuccessMessage("새로운 데이터가 추가되었습니다.");
-          setTimeout(() => setSuccessMessage(""), 2000);
+          setSuccessMessage("✓ DB에 저장됨");
+          setTimeout(() => setSuccessMessage(""), 1500);
         }
       } else {
+        // 기존 행이면 UPDATE
         const { error: updateError } = await supabase
           .from("재고")
           .update({ row_data: updatedRowData })
@@ -363,6 +409,77 @@ export default function EditPage() {
     setRecords((prev) => prev.filter((r) => r.id !== rowId));
   };
 
+  // 저장되지 않은 빈 행 모두 삭제
+  const handleClearEmptyRows = () => {
+    setRecords((prev) => prev.filter((r) => {
+      if (!r.isNew) return true;
+      // 데이터가 하나라도 있으면 유지
+      return Object.values(r.row_data).some((v) => v !== null && v !== undefined && String(v).trim() !== "");
+    }));
+    setSuccessMessage("빈 행이 정리되었습니다.");
+    setTimeout(() => setSuccessMessage(""), 2000);
+  };
+
+  // 미저장 행 전체 저장 (빈 행 포함)
+  const [isSavingAll, setIsSavingAll] = useState(false);
+  
+  const handleSaveAllRows = async () => {
+    const unsavedRows = records.filter((r) => r.isNew || r.id < 0);
+    
+    if (unsavedRows.length === 0) {
+      setSuccessMessage("저장할 새 행이 없습니다.");
+      setTimeout(() => setSuccessMessage(""), 2000);
+      return;
+    }
+
+    setIsSavingAll(true);
+    setError("");
+
+    try {
+      // 모든 미저장 행을 한 번에 INSERT
+      const rowsToInsert = unsavedRows.map((row) => ({
+        file_name: fileName,
+        row_data: row.row_data,
+      }));
+
+      const { data: insertedData, error: insertError } = await supabase
+        .from("재고")
+        .insert(rowsToInsert)
+        .select();
+
+      if (insertError) {
+        setError(`전체 저장 실패: ${insertError.message}`);
+      } else if (insertedData) {
+        // 저장된 데이터로 상태 업데이트
+        const insertedMap = new Map(
+          insertedData.map((item, idx) => [unsavedRows[idx].id, item])
+        );
+
+        setRecords((prev) =>
+          prev.map((r) => {
+            if (insertedMap.has(r.id)) {
+              const savedRow = insertedMap.get(r.id);
+              return { ...savedRow, isNew: false } as DbRecord;
+            }
+            return r;
+          })
+        );
+
+        setSuccessMessage(`✓ ${insertedData.length}개 행이 DB에 저장되었습니다!`);
+        setTimeout(() => setSuccessMessage(""), 3000);
+      }
+    } catch (err) {
+      console.error("Save all error:", err);
+      setError("전체 저장 중 오류가 발생했습니다.");
+    } finally {
+      setIsSavingAll(false);
+    }
+  };
+
+  // 저장되지 않은 행 개수
+  const unsavedCount = records.filter((r) => r.isNew).length;
+  const savedCount = records.filter((r) => !r.isNew).length;
+
   return (
     <main className={styles.main} dir="ltr">
       <div className={styles.glowOrb}></div>
@@ -384,20 +501,33 @@ export default function EditPage() {
           {error && <span className={styles.errorIndicator}>⚠ {error}</span>}
         </div>
         <div className={styles.toolbarRight}>
-          <span className={styles.recordCount}>{records.length}개 행 · {headers.length}개 열</span>
-          <button onClick={handleAddRow} className={styles.addRowBtn}>
-            ➕ 행 추가
-          </button>
+          <span className={styles.recordCount}>
+            저장됨: {savedCount} · 미저장: {unsavedCount} · 열: {headers.length}
+          </span>
           <button onClick={handleOpenAddColumnModal} className={styles.addColBtn}>
             ➕ 열 추가
           </button>
+          {unsavedCount > 0 && (
+            <>
+              <button 
+                onClick={handleSaveAllRows} 
+                className={styles.saveAllBtn}
+                disabled={isSavingAll}
+              >
+                {isSavingAll ? "⏳ 저장 중..." : `💾 전체 저장 (${unsavedCount}행)`}
+              </button>
+              <button onClick={handleClearEmptyRows} className={styles.clearBtn}>
+                🧹 빈 행 정리
+              </button>
+            </>
+          )}
           <button onClick={fetchData} className={styles.refreshBtn}>
             🔄 새로고침
           </button>
         </div>
       </header>
 
-      {/* 열 추가 모달 */}
+      {/* 열 추가 모달 (JSONB 기반 UPDATE) */}
       {showAddColumnModal && (
         <div className={styles.modalOverlay} onClick={() => setShowAddColumnModal(false)}>
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -426,7 +556,7 @@ export default function EditPage() {
                 disabled={isAddingColumn}
               />
               <p className={styles.modalHint}>
-                💡 모든 행에 빈 컬럼이 추가됩니다. 추가 후 각 셀을 클릭하여 데이터를 입력하세요.
+                💡 모든 행의 JSONB row_data에 새 컬럼이 추가됩니다.
               </p>
             </div>
             <div className={styles.modalFooter}>
@@ -456,7 +586,7 @@ export default function EditPage() {
         </div>
       )}
 
-      {/* Excel-like Grid */}
+      {/* Excel-like Grid with Infinite Scroll */}
       <div className={styles.gridContainer}>
         {isLoading ? (
           <div className={styles.loadingState}>
@@ -464,7 +594,7 @@ export default function EditPage() {
             <p>데이터를 불러오는 중...</p>
           </div>
         ) : records.length > 0 && headers.length > 0 ? (
-          <div className={styles.gridWrapper} dir="ltr">
+          <div className={styles.gridWrapper} dir="ltr" ref={gridWrapperRef}>
             <table className={styles.excelGrid} dir="ltr">
               <thead>
                 <tr>
@@ -507,7 +637,7 @@ export default function EditPage() {
                               onKeyDown={handleKeyDown}
                               onBlur={handleBlur}
                               className={styles.cellInput}
-                              placeholder="입력하세요..."
+                              placeholder="입력 후 Enter로 저장..."
                             />
                           ) : (
                             <span className={styles.cellContent}>
@@ -534,15 +664,26 @@ export default function EditPage() {
                 ))}
               </tbody>
             </table>
+            
+            {/* 무한 스크롤 로딩 표시 */}
+            <div className={styles.loadMoreTrigger}>
+              {isLoadingMore ? (
+                <div className={styles.loadingMore}>
+                  <div className={styles.miniSpinner}></div>
+                  <span>행 추가 중...</span>
+                </div>
+              ) : (
+                <div className={styles.scrollPrompt}>
+                  ↓ 아래로 스크롤하면 빈 행이 자동 추가됩니다
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <div className={styles.emptyState}>
             <span className={styles.emptyIcon}>📭</span>
             <h2>데이터가 없습니다</h2>
             <p>해당 파일의 데이터를 찾을 수 없습니다.</p>
-            <button onClick={handleAddRow} className={styles.addFirstRowBtn}>
-              ➕ 첫 번째 행 추가하기
-            </button>
             <Link href="/management" className={styles.backLink}>
               ← 목록으로 돌아가기
             </Link>
@@ -553,10 +694,14 @@ export default function EditPage() {
       {/* Status Bar */}
       <footer className={styles.statusBar}>
         <span>파일: {fileName}</span>
-        <span>행: {records.length}</span>
+        <span>총 행: {records.length}</span>
         <span>열: {headers.length}</span>
         {editingCell && <span>편집 중: {cleanHeaderName(editingCell.colKey)}</span>}
-        {records.some((r) => r.isNew) && <span className={styles.unsavedIndicator}>⚠ 저장되지 않은 행이 있습니다</span>}
+        {unsavedCount > 0 && (
+          <span className={styles.unsavedIndicator}>
+            ⚠ 미저장 행: {unsavedCount}개 (데이터 입력 후 Enter로 저장)
+          </span>
+        )}
       </footer>
     </main>
   );

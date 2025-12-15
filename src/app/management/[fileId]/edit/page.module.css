@@ -170,6 +170,67 @@
   box-shadow: 0 4px 12px rgba(137, 87, 229, 0.4);
 }
 
+.addMultiRowBtn {
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #0d8a7c 0%, #1db9aa 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(29, 185, 170, 0.3);
+}
+
+.addMultiRowBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(29, 185, 170, 0.4);
+}
+
+.saveAllBtn {
+  padding: 8px 18px;
+  background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(35, 134, 54, 0.3);
+}
+
+.saveAllBtn:hover {
+  background: linear-gradient(135deg, #2ea043 0%, #3fb950 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(35, 134, 54, 0.4);
+}
+
+.saveAllBtn:disabled {
+  background: #30363d;
+  color: #8b949e;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.clearBtn {
+  padding: 8px 16px;
+  background: transparent;
+  color: #d29922;
+  border: 1px solid #d29922;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.clearBtn:hover {
+  background: rgba(210, 153, 34, 0.1);
+}
+
 .refreshBtn {
   padding: 8px 16px;
   background: #238636;
@@ -196,6 +257,9 @@
   overflow: hidden;
   direction: ltr !important;
   text-align: left !important;
+  /* 명시적 높이 설정 - 스크롤 활성화 */
+  height: calc(100vh - 130px);
+  min-height: 400px;
 }
 
 /* Grid Wrapper - 가로/세로 스크롤 활성화 */
@@ -207,10 +271,12 @@
   direction: ltr !important;
   text-align: left !important;
   /* 스크롤 동작 개선 */
-  scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
   /* 가로 스크롤 강제 */
   white-space: nowrap;
+  /* 명시적 높이로 스크롤 활성화 */
+  height: 100%;
+  max-height: 100%;
 }
 
 /* Excel-like Grid Table - LTR 강제 */
@@ -563,6 +629,64 @@
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
+}
+
+.scrollHint {
+  color: #8b949e;
+  font-size: 11px;
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+/* 무한 스크롤 트리거 */
+.loadMoreTrigger {
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: linear-gradient(to bottom, transparent, rgba(13, 17, 23, 0.8));
+  position: sticky;
+  bottom: 0;
+}
+
+.loadingMore {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #3fb950;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 20px;
+  background: rgba(35, 134, 54, 0.15);
+  border-radius: 8px;
+  border: 1px solid rgba(35, 134, 54, 0.3);
+}
+
+.miniSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #30363d;
+  border-top-color: #388bfd;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.scrollPrompt {
+  color: #8b949e;
+  font-size: 13px;
+  text-align: center;
+  padding: 12px 24px;
+  background: rgba(48, 54, 61, 0.5);
+  border-radius: 8px;
+  border: 1px dashed #30363d;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
 
 /* Modal Styles */
