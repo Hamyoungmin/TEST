@@ -115,6 +115,25 @@
   border-radius: 6px;
 }
 
+.validationError {
+  color: #f85149;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 16px;
+  background: rgba(248, 81, 73, 0.15);
+  border: 1px solid rgba(248, 81, 73, 0.4);
+  border-radius: 8px;
+  animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-5px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(5px); }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-5px); }
   to { opacity: 1; transform: translateY(0); }
@@ -188,31 +207,39 @@
   box-shadow: 0 4px 12px rgba(29, 185, 170, 0.4);
 }
 
-.saveAllBtn {
-  padding: 8px 18px;
-  background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+/* 일괄 저장 버튼 (수정된 행 Upsert) */
+.batchSaveBtn {
+  padding: 10px 20px;
+  background: linear-gradient(135deg, #1f6feb 0%, #388bfd 100%);
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 14px;
   font-weight: 600;
   transition: all 0.2s;
-  box-shadow: 0 2px 8px rgba(35, 134, 54, 0.3);
+  box-shadow: 0 2px 10px rgba(31, 111, 235, 0.4);
+  animation: pulse-blue 2s ease-in-out infinite;
 }
 
-.saveAllBtn:hover {
-  background: linear-gradient(135deg, #2ea043 0%, #3fb950 100%);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(35, 134, 54, 0.4);
+.batchSaveBtn:hover {
+  background: linear-gradient(135deg, #388bfd 0%, #58a6ff 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(31, 111, 235, 0.5);
 }
 
-.saveAllBtn:disabled {
+.batchSaveBtn:disabled {
   background: #30363d;
   color: #8b949e;
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+  animation: none;
+}
+
+@keyframes pulse-blue {
+  0%, 100% { box-shadow: 0 2px 10px rgba(31, 111, 235, 0.4); }
+  50% { box-shadow: 0 2px 20px rgba(31, 111, 235, 0.6); }
 }
 
 .clearBtn {
@@ -322,7 +349,10 @@
 }
 
 .colName {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 10px 16px;
   font-size: 13px;
   font-weight: 600;
@@ -330,6 +360,22 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 숫자 컬럼 헤더 표시 */
+.numericColHeader {
+  background: linear-gradient(180deg, #1a2636 0%, #162030 100%) !important;
+  border-bottom: 2px solid #388bfd !important;
+}
+
+.numericBadge {
+  font-size: 9px;
+  font-weight: 700;
+  color: #388bfd;
+  background: rgba(56, 139, 253, 0.15);
+  padding: 2px 5px;
+  border-radius: 4px;
+  margin-left: 4px;
 }
 
 /* Row Headers - 1, 2, 3 */
@@ -393,6 +439,24 @@
 .newRow .rowHeader {
   background: #1f3a5f;
   border-color: #388bfd;
+}
+
+/* 수정된 행 표시 */
+.modifiedRow {
+  background: rgba(210, 153, 34, 0.08) !important;
+}
+
+.modifiedRow .rowHeader {
+  background: #3d2f1a !important;
+  border-left: 3px solid #d29922 !important;
+}
+
+.modifiedBadge {
+  display: block;
+  font-size: 8px;
+  color: #d29922;
+  font-weight: 700;
+  margin-top: 2px;
 }
 
 .newBadge {
@@ -492,6 +556,28 @@
 
 .cellInput::selection {
   background: rgba(56, 139, 253, 0.4);
+}
+
+/* 유효하지 않은 셀 (빨간색 테두리) */
+.invalidCell {
+  border: 2px solid #f85149 !important;
+  background: rgba(248, 81, 73, 0.1) !important;
+  animation: pulseRed 1s ease-in-out infinite;
+}
+
+.invalidInput {
+  border: 2px solid #f85149 !important;
+  background: rgba(248, 81, 73, 0.15) !important;
+  color: #f85149 !important;
+}
+
+@keyframes pulseRed {
+  0%, 100% { 
+    box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.4);
+  }
+  50% { 
+    box-shadow: 0 0 0 4px rgba(248, 81, 73, 0.2);
+  }
 }
 
 /* Row Stripe */

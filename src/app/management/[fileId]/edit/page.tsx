@@ -23,6 +23,36 @@ const cleanHeaderName = (header: string): string => {
   return header.trim();
 };
 
+// 숫자만 입력 가능한 컬럼 목록 (대소문자 무시, 공백 제거하여 비교)
+const NUMERIC_ONLY_COLUMNS = [
+  "현재_재고",
+  "현재재고", 
+  "재고",
+  "단가",
+  "가격",
+  "수량",
+  "금액",
+  "총액",
+  "합계",
+];
+
+// 컬럼이 숫자만 입력 가능한지 확인
+const isNumericColumn = (header: string): boolean => {
+  const cleanedHeader = cleanHeaderName(header).toLowerCase().replace(/[\s_-]/g, "");
+  return NUMERIC_ONLY_COLUMNS.some(
+    (col) => cleanedHeader.includes(col.toLowerCase().replace(/[\s_-]/g, ""))
+  );
+};
+
+// 값이 유효한 숫자인지 확인 (빈 값도 허용)
+const isValidNumber = (value: string): boolean => {
+  if (value === "" || value === null || value === undefined) return true;
+  const trimmed = String(value).trim();
+  if (trimmed === "") return true;
+  // 숫자, 소수점, 음수 부호 허용
+  return /^-?\d*\.?\d*$/.test(trimmed);
+};
+
 // 새 행을 위한 임시 ID 생성 (음수값 사용)
 let tempIdCounter = -1;
 const generateTempId = () => {
@@ -73,6 +103,14 @@ export default function EditPage() {
   // 무한 스크롤 관련
   const gridWrapperRef = useRef<HTMLDivElement>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+  // 일괄 저장을 위한 수정된 행 추적
+  const [modifiedRowIds, setModifiedRowIds] = useState<Set<number>>(new Set());
+  const [isBatchSaving, setIsBatchSaving] = useState(false);
+
+  // 유효성 검사 오류 셀 추적 (rowId-colKey 형식)
+  const [invalidCells, setInvalidCells] = useState<Set<string>>(new Set());
+  const [validationError, setValidationError] = useState<string>("");
 
   // fileId에 해당하는 데이터 불러오기
   const fetchData = async () => {
@@ -318,8 +356,8 @@ export default function EditPage() {
     setEditValue(value !== null && value !== undefined ? String(value) : "");
   };
 
-  // 셀 수정 후 DB 업데이트 (새 행이면 Insert, 기존 행이면 Update)
-  const handleCellUpdate = async () => {
+  // 셀 수정 - 로컬 상태만 업데이트하고 수정된 행 추적 (일괄 저장 방식)
+  const handleCellUpdate = () => {
     if (!editingCell) return;
 
     const { rowId, colKey } = editingCell;
@@ -332,61 +370,145 @@ export default function EditPage() {
     const oldValue = record.row_data[colKey];
     if (String(oldValue ?? "") === editValue) {
       setEditingCell(null);
+      // 값이 변경되지 않았으면 유효성 오류도 제거
+      const cellKey = `${rowId}-${colKey}`;
+      setInvalidCells((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(cellKey);
+        return newSet;
+      });
       return;
     }
+
+    const cellKey = `${rowId}-${colKey}`;
+
+    // 숫자 컬럼 유효성 검사
+    if (isNumericColumn(colKey) && !isValidNumber(editValue)) {
+      // 유효하지 않은 셀로 표시
+      setInvalidCells((prev) => new Set(prev).add(cellKey));
+      setValidationError(`⚠️ "${cleanHeaderName(colKey)}" 컬럼에는 숫자만 입력할 수 있습니다.`);
+      setTimeout(() => setValidationError(""), 4000);
+      // 편집 모드 유지하여 수정 기회 제공
+      return;
+    }
+
+    // 유효성 통과 시 오류 상태 제거
+    setInvalidCells((prev) => {
+      const newSet = new Set(prev);
+      newSet.delete(cellKey);
+      return newSet;
+    });
+    setValidationError("");
 
     const updatedRowData = {
       ...record.row_data,
       [colKey]: editValue,
     };
 
+    // 로컬 상태만 업데이트
+    setRecords((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, row_data: updatedRowData } : r))
+    );
+
+    // 수정된 행 ID 추적
+    setModifiedRowIds((prev) => new Set(prev).add(rowId));
+    
+    setEditingCell(null);
+  };
+
+  // 일괄 저장 - 수정된 모든 행을 한 번에 Upsert
+  const handleBatchSave = async () => {
+    if (modifiedRowIds.size === 0) {
+      setSuccessMessage("저장할 변경사항이 없습니다.");
+      setTimeout(() => setSuccessMessage(""), 2000);
+      return;
+    }
+
+    setIsBatchSaving(true);
+    setError("");
+
     try {
-      // 새 행이면 INSERT (무한 스크롤로 생성된 빈 행에 데이터 입력 시)
-      if (record.isNew || record.id < 0) {
+      const modifiedRecords = records.filter((r) => modifiedRowIds.has(r.id));
+      
+      // 새 행 (INSERT 대상)
+      const newRows = modifiedRecords.filter((r) => r.isNew || r.id < 0);
+      // 기존 행 (UPDATE 대상)
+      const existingRows = modifiedRecords.filter((r) => !r.isNew && r.id > 0);
+
+      let insertedCount = 0;
+      let updatedCount = 0;
+      const newIdMapping = new Map<number, number>(); // 임시 ID -> 실제 ID
+
+      // 새 행들 일괄 INSERT
+      if (newRows.length > 0) {
+        const rowsToInsert = newRows.map((row) => ({
+          file_name: fileName,
+          row_data: row.row_data,
+        }));
+
         const { data: insertedData, error: insertError } = await supabase
           .from("재고")
-          .insert({
-            file_name: fileName,
-            row_data: updatedRowData,
-          })
-          .select()
-          .single();
+          .insert(rowsToInsert)
+          .select();
 
         if (insertError) {
-          setError(`저장 실패: ${insertError.message}`);
-        } else if (insertedData) {
-          setRecords((prev) =>
-            prev.map((r) =>
-              r.id === rowId
-                ? { ...insertedData, isNew: false }
-                : r
-            )
-          );
-          setSuccessMessage("✓ DB에 저장됨");
-          setTimeout(() => setSuccessMessage(""), 1500);
+          throw new Error(`INSERT 실패: ${insertError.message}`);
         }
-      } else {
-        // 기존 행이면 UPDATE
-        const { error: updateError } = await supabase
-          .from("재고")
-          .update({ row_data: updatedRowData })
-          .eq("id", rowId);
 
-        if (updateError) {
-          setError(`저장 실패: ${updateError.message}`);
-        } else {
-          setRecords((prev) =>
-            prev.map((r) => (r.id === rowId ? { ...r, row_data: updatedRowData } : r))
-          );
-          setSuccessMessage("저장됨");
-          setTimeout(() => setSuccessMessage(""), 1500);
+        if (insertedData) {
+          insertedCount = insertedData.length;
+          // 임시 ID와 실제 ID 매핑
+          newRows.forEach((row, idx) => {
+            if (insertedData[idx]) {
+              newIdMapping.set(row.id, insertedData[idx].id);
+            }
+          });
         }
       }
+
+      // 기존 행들 일괄 UPDATE (개별 UPDATE - Supabase는 bulk update 미지원)
+      if (existingRows.length > 0) {
+        const updatePromises = existingRows.map((row) =>
+          supabase
+            .from("재고")
+            .update({ row_data: row.row_data })
+            .eq("id", row.id)
+        );
+
+        const results = await Promise.all(updatePromises);
+        const errors = results.filter((r) => r.error);
+        
+        if (errors.length > 0) {
+          throw new Error(`UPDATE 실패: ${errors.length}개 행 오류`);
+        }
+        
+        updatedCount = existingRows.length;
+      }
+
+      // 상태 업데이트: 새 행들의 ID 교체 및 isNew 플래그 제거
+      setRecords((prev) =>
+        prev.map((r) => {
+          if (newIdMapping.has(r.id)) {
+            return { ...r, id: newIdMapping.get(r.id)!, isNew: false };
+          }
+          if (modifiedRowIds.has(r.id) && r.isNew) {
+            return { ...r, isNew: false };
+          }
+          return r;
+        })
+      );
+
+      // 수정된 행 목록 초기화
+      setModifiedRowIds(new Set());
+
+      setSuccessMessage(`✓ ${insertedCount + updatedCount}개 행 저장 완료! (INSERT: ${insertedCount}, UPDATE: ${updatedCount})`);
+      setTimeout(() => setSuccessMessage(""), 3000);
+
     } catch (err) {
-      console.error("Update error:", err);
-      setError("저장 중 오류가 발생했습니다.");
+      console.error("Batch save error:", err);
+      setError(err instanceof Error ? err.message : "일괄 저장 중 오류가 발생했습니다.");
     } finally {
-      setEditingCell(null);
+      setIsBatchSaving(false);
     }
   };
 
@@ -420,65 +542,10 @@ export default function EditPage() {
     setTimeout(() => setSuccessMessage(""), 2000);
   };
 
-  // 미저장 행 전체 저장 (빈 행 포함)
-  const [isSavingAll, setIsSavingAll] = useState(false);
-  
-  const handleSaveAllRows = async () => {
-    const unsavedRows = records.filter((r) => r.isNew || r.id < 0);
-    
-    if (unsavedRows.length === 0) {
-      setSuccessMessage("저장할 새 행이 없습니다.");
-      setTimeout(() => setSuccessMessage(""), 2000);
-      return;
-    }
-
-    setIsSavingAll(true);
-    setError("");
-
-    try {
-      // 모든 미저장 행을 한 번에 INSERT
-      const rowsToInsert = unsavedRows.map((row) => ({
-        file_name: fileName,
-        row_data: row.row_data,
-      }));
-
-      const { data: insertedData, error: insertError } = await supabase
-        .from("재고")
-        .insert(rowsToInsert)
-        .select();
-
-      if (insertError) {
-        setError(`전체 저장 실패: ${insertError.message}`);
-      } else if (insertedData) {
-        // 저장된 데이터로 상태 업데이트
-        const insertedMap = new Map(
-          insertedData.map((item, idx) => [unsavedRows[idx].id, item])
-        );
-
-        setRecords((prev) =>
-          prev.map((r) => {
-            if (insertedMap.has(r.id)) {
-              const savedRow = insertedMap.get(r.id);
-              return { ...savedRow, isNew: false } as DbRecord;
-            }
-            return r;
-          })
-        );
-
-        setSuccessMessage(`✓ ${insertedData.length}개 행이 DB에 저장되었습니다!`);
-        setTimeout(() => setSuccessMessage(""), 3000);
-      }
-    } catch (err) {
-      console.error("Save all error:", err);
-      setError("전체 저장 중 오류가 발생했습니다.");
-    } finally {
-      setIsSavingAll(false);
-    }
-  };
-
-  // 저장되지 않은 행 개수
-  const unsavedCount = records.filter((r) => r.isNew).length;
-  const savedCount = records.filter((r) => !r.isNew).length;
+  // 행 개수 통계
+  const newRowCount = records.filter((r) => r.isNew || r.id < 0).length;
+  const savedRowCount = records.filter((r) => !r.isNew && r.id > 0).length;
+  const modifiedCount = modifiedRowIds.size;
 
   return (
     <main className={styles.main} dir="ltr">
@@ -499,27 +566,29 @@ export default function EditPage() {
         <div className={styles.toolbarCenter}>
           {successMessage && <span className={styles.saveIndicator}>✓ {successMessage}</span>}
           {error && <span className={styles.errorIndicator}>⚠ {error}</span>}
+          {validationError && <span className={styles.validationError}>{validationError}</span>}
         </div>
         <div className={styles.toolbarRight}>
           <span className={styles.recordCount}>
-            저장됨: {savedCount} · 미저장: {unsavedCount} · 열: {headers.length}
+            DB: {savedRowCount} · 새 행: {newRowCount} · 수정: {modifiedCount} · 열: {headers.length}
           </span>
           <button onClick={handleOpenAddColumnModal} className={styles.addColBtn}>
             ➕ 열 추가
           </button>
-          {unsavedCount > 0 && (
-            <>
-              <button 
-                onClick={handleSaveAllRows} 
-                className={styles.saveAllBtn}
-                disabled={isSavingAll}
-              >
-                {isSavingAll ? "⏳ 저장 중..." : `💾 전체 저장 (${unsavedCount}행)`}
-              </button>
-              <button onClick={handleClearEmptyRows} className={styles.clearBtn}>
-                🧹 빈 행 정리
-              </button>
-            </>
+          {/* 일괄 저장 버튼 - 수정된 행이 있을 때 표시 */}
+          {modifiedCount > 0 && (
+            <button 
+              onClick={handleBatchSave} 
+              className={styles.batchSaveBtn}
+              disabled={isBatchSaving}
+            >
+              {isBatchSaving ? "⏳ 저장 중..." : `💾 일괄 저장 (${modifiedCount}행)`}
+            </button>
+          )}
+          {newRowCount > 0 && (
+            <button onClick={handleClearEmptyRows} className={styles.clearBtn}>
+              🧹 빈 행 정리
+            </button>
           )}
           <button onClick={fetchData} className={styles.refreshBtn}>
             🔄 새로고침
@@ -600,33 +669,52 @@ export default function EditPage() {
                 <tr>
                   <th className={styles.rowHeader}></th>
                   {headers.map((header, idx) => (
-                    <th key={header} className={styles.colHeader}>
+                    <th 
+                      key={header} 
+                      className={`${styles.colHeader} ${isNumericColumn(header) ? styles.numericColHeader : ""}`}
+                      title={isNumericColumn(header) ? "숫자만 입력 가능한 컬럼" : ""}
+                    >
                       <span className={styles.colLetter}>
                         {String.fromCharCode(65 + idx)}
                       </span>
-                      <span className={styles.colName}>{displayHeaders[idx]}</span>
+                      <span className={styles.colName}>
+                        {displayHeaders[idx]}
+                        {isNumericColumn(header) && <span className={styles.numericBadge}>123</span>}
+                      </span>
                     </th>
                   ))}
                   <th className={styles.actionHeader}>작업</th>
                 </tr>
               </thead>
               <tbody>
-                {records.map((record, rowIdx) => (
-                  <tr key={record.id} className={record.isNew ? styles.newRow : ""}>
+                {records.map((record, rowIdx) => {
+                  const isModified = modifiedRowIds.has(record.id);
+                  const rowClassName = [
+                    record.isNew ? styles.newRow : "",
+                    isModified ? styles.modifiedRow : "",
+                  ].filter(Boolean).join(" ");
+                  
+                  return (
+                  <tr key={record.id} className={rowClassName}>
                     <td className={styles.rowHeader}>
                       {rowIdx + 1}
                       {record.isNew && <span className={styles.newBadge}>NEW</span>}
+                      {isModified && !record.isNew && <span className={styles.modifiedBadge}>수정됨</span>}
                     </td>
                     {headers.map((header) => {
                       const isEditing =
                         editingCell?.rowId === record.id && editingCell?.colKey === header;
                       const cellValue = record.row_data[header];
+                      const cellKey = `${record.id}-${header}`;
+                      const isInvalid = invalidCells.has(cellKey);
+                      const isNumeric = isNumericColumn(header);
 
                       return (
                         <td
-                          key={`${record.id}-${header}`}
-                          className={`${styles.cell} ${isEditing ? styles.editing : ""} ${record.isNew ? styles.newCell : ""}`}
+                          key={cellKey}
+                          className={`${styles.cell} ${isEditing ? styles.editing : ""} ${record.isNew ? styles.newCell : ""} ${isInvalid ? styles.invalidCell : ""}`}
                           onClick={() => !isEditing && handleCellClick(record.id, header, cellValue)}
+                          title={isNumeric ? "숫자만 입력 가능" : ""}
                         >
                           {isEditing ? (
                             <input
@@ -636,8 +724,8 @@ export default function EditPage() {
                               onChange={(e) => setEditValue(e.target.value)}
                               onKeyDown={handleKeyDown}
                               onBlur={handleBlur}
-                              className={styles.cellInput}
-                              placeholder="입력 후 Enter로 저장..."
+                              className={`${styles.cellInput} ${isInvalid ? styles.invalidInput : ""}`}
+                              placeholder={isNumeric ? "숫자만 입력..." : "입력 후 Enter로 저장..."}
                             />
                           ) : (
                             <span className={styles.cellContent}>
@@ -661,7 +749,8 @@ export default function EditPage() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             
@@ -693,13 +782,13 @@ export default function EditPage() {
 
       {/* Status Bar */}
       <footer className={styles.statusBar}>
-        <span>파일: {fileName}</span>
-        <span>총 행: {records.length}</span>
+        <span>📄 {fileName}</span>
+        <span>행: {records.length}</span>
         <span>열: {headers.length}</span>
-        {editingCell && <span>편집 중: {cleanHeaderName(editingCell.colKey)}</span>}
-        {unsavedCount > 0 && (
+        {editingCell && <span>✏️ 편집 중: {cleanHeaderName(editingCell.colKey)}</span>}
+        {modifiedCount > 0 && (
           <span className={styles.unsavedIndicator}>
-            ⚠ 미저장 행: {unsavedCount}개 (데이터 입력 후 Enter로 저장)
+            ⚠ 수정된 행: {modifiedCount}개 - 💾 일괄 저장 버튼을 눌러 저장하세요
           </span>
         )}
       </footer>
