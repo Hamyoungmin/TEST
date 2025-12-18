@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import styles from "./page.module.css";
@@ -15,11 +15,30 @@ interface FileInfo {
 export default function ManagementPage() {
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string>("");
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+
+  // 토스트 알림 시스템
+  const [toasts, setToasts] = useState<Array<{ id: number; message: string; type: 'error' | 'success' }>>([]);
+  const toastIdRef = useRef(0);
+
+  // 토스트 추가 함수
+  const showToast = useCallback((message: string, type: 'error' | 'success' = 'error') => {
+    const id = toastIdRef.current++;
+    setToasts(prev => [...prev, { id, message, type }]);
+    
+    // 5초 후 자동 제거
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  }, []);
+
+  // 토스트 제거 함수
+  const removeToast = useCallback((id: number) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
 
   const fetchFiles = async () => {
     setIsLoading(true);
-    setError("");
     try {
       // file_name과 created_at만 가져와서 효율적으로 처리
       const { data: records, error: fetchError } = await supabase
@@ -29,7 +48,7 @@ export default function ManagementPage() {
 
       if (fetchError) {
         console.error("Fetch error:", fetchError);
-        setError(`데이터 불러오기 실패: ${fetchError.message}`);
+        showToast(`데이터 불러오기 실패: ${fetchError.message}`, 'error');
       } else if (records) {
         // 파일명 기준으로 DISTINCT 처리 (고유한 파일 목록 생성)
         const fileMap = new Map<string, FileInfo>();
@@ -69,7 +88,7 @@ export default function ManagementPage() {
       }
     } catch (err) {
       console.error("Fetch error:", err);
-      setError("데이터를 불러오는 중 오류가 발생했습니다.");
+      showToast("인터넷 연결을 확인해주세요. 데이터를 불러오는 중 오류가 발생했습니다.", 'error');
     } finally {
       setIsLoading(false);
     }
@@ -85,6 +104,7 @@ export default function ManagementPage() {
       return;
     }
 
+    setIsDeleting(fileName);
     try {
       const { error: deleteError } = await supabase
         .from("재고")
@@ -92,21 +112,49 @@ export default function ManagementPage() {
         .eq("file_name", fileName);
 
       if (deleteError) {
-        setError(`삭제 실패: ${deleteError.message}`);
+        showToast(`삭제 실패: ${deleteError.message}`, 'error');
       } else {
         // 목록에서 제거
         setFiles((prev) => prev.filter((f) => f.file_name !== fileName));
+        showToast(`"${fileName}" 파일이 삭제되었습니다.`, 'success');
       }
     } catch (err) {
       console.error("Delete error:", err);
-      setError("삭제 중 오류가 발생했습니다.");
+      showToast("인터넷 연결을 확인해주세요. 삭제 중 오류가 발생했습니다.", 'error');
+    } finally {
+      setIsDeleting(null);
     }
   };
+
+  // 로딩 오버레이 표시 조건
+  const showLoadingOverlay = (isLoading && files.length > 0) || isDeleting !== null;
+  const loadingMessage = isDeleting ? `"${isDeleting}" 삭제 중...` : "데이터를 불러오는 중...";
 
   return (
     <main className={styles.main}>
       <div className={styles.glowOrb}></div>
       <div className={styles.glowOrb2}></div>
+
+      {/* Toast Container */}
+      {toasts.length > 0 && (
+        <div className={styles.toastContainer}>
+          {toasts.map(toast => (
+            <div 
+              key={toast.id} 
+              className={`${styles.toast} ${toast.type === 'error' ? styles.toastError : styles.toastSuccess}`}
+            >
+              <span className={styles.toastIcon}>{toast.type === 'error' ? '⚠️' : '✓'}</span>
+              <span className={styles.toastMessage}>{toast.message}</span>
+              <button 
+                onClick={() => removeToast(toast.id)} 
+                className={styles.toastClose}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Header */}
       <header className={styles.header}>
@@ -124,17 +172,19 @@ export default function ManagementPage() {
         </div>
       </header>
 
-      {/* Messages */}
-      {error && (
-        <div className={styles.errorMessage}>
-          <span>⚠️</span> {error}
-          <button onClick={() => setError("")} className={styles.closeBtn}>×</button>
-        </div>
-      )}
-
       {/* File List */}
       <div className={styles.tableContainer}>
-        {isLoading ? (
+        {/* 로딩/삭제 오버레이 */}
+        {showLoadingOverlay && (
+          <div className={styles.loadingOverlay}>
+            <div className={styles.loadingOverlayContent}>
+              <div className={styles.overlaySpinner}></div>
+              <p>{loadingMessage}</p>
+            </div>
+          </div>
+        )}
+
+        {isLoading && files.length === 0 ? (
           <div className={styles.loading}>
             <div className={styles.spinner}></div>
             <p>데이터를 불러오는 중...</p>
